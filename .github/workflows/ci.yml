@@ -11,11 +11,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install latest CMake
+        uses: lukka/get-cmake@latest
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build clang
+            ninja-build clang
 
       - name: Bootstrap vcpkg
         run: |
