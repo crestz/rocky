@@ -25,6 +25,14 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "ci",
+      "displayName": "CI (Debug + Tests)",
+      "inherits": "debug-base",
+      "cacheVariables": {
+        "ROCKY_BUILD_TESTS": true
+      }
     }
   ]
 }
