@@ -34,24 +34,24 @@ namespace rocky {
     responsible for ensuring that popped nodes are not freed while any
     concurrent thread may still hold a pointer to them.
 */
-template <typename T, T *T::*Next> class IntrusiveList {
+template <typename T, T* T::* Next> class IntrusiveList {
 public:
   // -- Iterators --------------------------------------------------------------
 
   class iterator {
   public:
     iterator() noexcept = default;
-    explicit iterator(T *ptr) noexcept : m_Curr{ptr} {}
+    explicit iterator(T* ptr) noexcept : curr{ptr} {}
 
-    T *operator->() noexcept { return m_Curr; }
-    const T *operator->() const noexcept { return m_Curr; }
+    T* operator->() noexcept { return curr; }
+    const T* operator->() const noexcept { return curr; }
 
-    T &operator*() noexcept { return *m_Curr; }
-    const T &operator*() const noexcept { return *m_Curr; }
+    T& operator*() noexcept { return *curr; }
+    const T& operator*() const noexcept { return *curr; }
 
-    iterator &operator++() noexcept {
-      if (m_Curr != nullptr)
-        m_Curr = m_Curr->*Next;
+    iterator& operator++() noexcept {
+      if (curr != nullptr)
+        curr = curr->*Next;
       return *this;
     }
 
@@ -61,28 +61,28 @@ public:
       return old;
     }
 
-    bool operator==(const iterator &other) const noexcept {
-      return m_Curr == other.m_Curr;
+    bool operator==(const iterator& other) const noexcept {
+      return curr == other.curr;
     }
-    bool operator!=(const iterator &other) const noexcept {
-      return m_Curr != other.m_Curr;
+    bool operator!=(const iterator& other) const noexcept {
+      return curr != other.curr;
     }
 
   private:
-    T *m_Curr{nullptr};
+    T* curr{nullptr};
   };
 
   class const_iterator {
   public:
     const_iterator() noexcept = default;
-    explicit const_iterator(const T *ptr) noexcept : m_Curr{ptr} {}
+    explicit const_iterator(const T* ptr) noexcept : curr{ptr} {}
 
-    const T *operator->() const noexcept { return m_Curr; }
-    const T &operator*() const noexcept { return *m_Curr; }
+    const T* operator->() const noexcept { return curr; }
+    const T& operator*() const noexcept { return *curr; }
 
-    const_iterator &operator++() noexcept {
-      if (m_Curr != nullptr)
-        m_Curr = m_Curr->*Next;
+    const_iterator& operator++() noexcept {
+      if (curr != nullptr)
+        curr = curr->*Next;
       return *this;
     }
 
@@ -92,26 +92,26 @@ public:
       return old;
     }
 
-    bool operator==(const const_iterator &other) const noexcept {
-      return m_Curr == other.m_Curr;
+    bool operator==(const const_iterator& other) const noexcept {
+      return curr == other.curr;
     }
-    bool operator!=(const const_iterator &other) const noexcept {
-      return m_Curr != other.m_Curr;
+    bool operator!=(const const_iterator& other) const noexcept {
+      return curr != other.curr;
     }
 
   private:
-    const T *m_Curr{nullptr};
+    const T* curr{nullptr};
   };
 
   // -- Lifecycle --------------------------------------------------------------
 
-  IntrusiveList() noexcept : m_Head{nullptr} {}
+  IntrusiveList() noexcept : head{nullptr} {}
 
-  IntrusiveList(const IntrusiveList &) = delete;
-  IntrusiveList &operator=(const IntrusiveList &) = delete;
+  IntrusiveList(const IntrusiveList&) = delete;
+  IntrusiveList& operator=(const IntrusiveList&) = delete;
 
-  IntrusiveList(IntrusiveList &&) = delete;
-  IntrusiveList &operator=(IntrusiveList &&) = delete;
+  IntrusiveList(IntrusiveList&&) = delete;
+  IntrusiveList& operator=(IntrusiveList&&) = delete;
 
   // -- Observation ------------------------------------------------------------
 
@@ -122,16 +122,16 @@ public:
     Concurrent Push()/Pop() may immediately change the result.
   */
   bool Empty() const noexcept {
-    return m_Head.load(std::memory_order_acquire) == nullptr;
+    return head.load(std::memory_order_acquire) == nullptr;
   }
 
   iterator Begin() noexcept {
-    return iterator{m_Head.load(std::memory_order_acquire)};
+    return iterator{head.load(std::memory_order_acquire)};
   }
   iterator End() noexcept { return iterator{}; }
 
   const_iterator Begin() const noexcept {
-    return const_iterator{m_Head.load(std::memory_order_acquire)};
+    return const_iterator{head.load(std::memory_order_acquire)};
   }
   const_iterator End() const noexcept { return const_iterator{}; }
 
@@ -159,13 +159,12 @@ public:
       from Pop() may be reused after the caller has established that no
       concurrent thread holds a reference to it (per the reclamation protocol).
   */
-  void Push(T *node) noexcept {
-    T *oldHead = m_Head.load(std::memory_order_relaxed);
+  void Push(T* node) noexcept {
+    T* oldHead = head.load(std::memory_order_relaxed);
     node->*Next = oldHead;
 
-    while (!m_Head.compare_exchange_weak(oldHead, node,
-                                         std::memory_order_release,
-                                         std::memory_order_acquire)) {
+    while (!head.compare_exchange_weak(oldHead, node, std::memory_order_release,
+                                       std::memory_order_acquire)) {
       node->*Next = oldHead;
       CPURelax();
     }
@@ -181,15 +180,15 @@ public:
     storage. The surrounding reclamation protocol determines when it is safe
     to free or reuse the node.
   */
-  [[nodiscard]] T *Pop() noexcept {
-    T *oldHead = m_Head.load(std::memory_order_acquire);
+  [[nodiscard]] T* Pop() noexcept {
+    T* oldHead = head.load(std::memory_order_acquire);
 
     while (oldHead != nullptr) {
-      T *newHead = oldHead->*Next;
+      T* newHead = oldHead->*Next;
 
-      if (m_Head.compare_exchange_weak(oldHead, newHead,
-                                       std::memory_order_acq_rel,
-                                       std::memory_order_acquire)) {
+      if (head.compare_exchange_weak(oldHead, newHead,
+                                     std::memory_order_acq_rel,
+                                     std::memory_order_acquire)) {
         return oldHead;
       }
 
@@ -200,7 +199,7 @@ public:
   }
 
 private:
-  std::atomic<T *> m_Head;
+  std::atomic<T*> head;
 };
 
 } // namespace rocky

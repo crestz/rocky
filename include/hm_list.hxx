@@ -29,8 +29,8 @@ namespace rocky {
     - marked pointer:   this node is logically deleted
 
   Dummy-head design:
-    - m_DummyHead is never removed.
-    - m_DummyHead.*Next is the actual list head.
+    - dummyHead is never removed.
+    - dummyHead.*Next is the actual list head.
     - There is no special "remove from head" case.
 
   Public concurrent API:
@@ -60,13 +60,13 @@ namespace rocky {
     - Contains() is lock-free.
     - Iteration  is weakly consistent and does not provide a snapshot.
 */
-template <typename T, std::atomic<std::uintptr_t> T::*Next> class HMList {
+template <typename T, std::atomic<std::uintptr_t> T::* Next> class HMList {
   static_assert(alignof(T) >= 2,
                 "HMList requires at least one spare low pointer bit");
   static_assert(std::is_default_constructible_v<T>,
                 "HMList requires T to be default-constructible for dummy head");
 
-  static constexpr std::uintptr_t MarkBit = std::uintptr_t{1};
+  static constexpr std::uintptr_t markBit = std::uintptr_t{1};
 
 public:
   class iterator {
@@ -75,11 +75,11 @@ public:
       End iterator.
 
       Invariant:
-        m_Curr == nullptr means end().
-        m_Dummy is nullptr only for the default/end iterator; it is never
+        curr == nullptr means end().
+        dummy is nullptr only for the default/end iterator; it is never
         accessed in that state.
     */
-    iterator() noexcept : m_Dummy{nullptr}, m_Curr{nullptr}, m_Prev{nullptr} {}
+    iterator() noexcept : dummy{nullptr}, curr{nullptr}, prev{nullptr} {}
 
     /*
       Begin iterator.
@@ -90,17 +90,17 @@ public:
 
       The iterator may opportunistically help unlink marked nodes.
     */
-    explicit iterator(T *dummy) noexcept
-        : m_Dummy{dummy}, m_Curr{nullptr}, m_Prev{dummy} {
-      m_Curr = loadUnmarkedNext(m_Dummy);
+    explicit iterator(T* dummy) noexcept
+        : dummy{dummy}, curr{nullptr}, prev{dummy} {
+      curr = loadUnmarkedNext(dummy);
       advanceToLive();
     }
 
-    const T *operator->() const noexcept { return m_Curr; }
-    T *operator->() noexcept { return m_Curr; }
+    const T* operator->() const noexcept { return curr; }
+    T* operator->() noexcept { return curr; }
 
-    const T &operator*() const noexcept { return *m_Curr; }
-    T &operator*() noexcept { return *m_Curr; }
+    const T& operator*() const noexcept { return *curr; }
+    T& operator*() noexcept { return *curr; }
 
     /*
       Advance to the next live node.
@@ -118,13 +118,13 @@ public:
         - Concurrent deletions may cause nodes to be skipped.
         - The iterator does not provide a stable snapshot.
     */
-    iterator &operator++() noexcept {
-      if (m_Curr == nullptr) {
+    iterator& operator++() noexcept {
+      if (curr == nullptr) {
         return *this;
       }
 
-      m_Prev = m_Curr;
-      m_Curr = loadUnmarkedNext(m_Curr);
+      prev = curr;
+      curr = loadUnmarkedNext(curr);
 
       advanceToLive();
       return *this;
@@ -136,38 +136,38 @@ public:
       return old;
     }
 
-    bool operator==(const iterator &other) const noexcept {
-      return m_Curr == other.m_Curr;
+    bool operator==(const iterator& other) const noexcept {
+      return curr == other.curr;
     }
 
-    bool operator!=(const iterator &other) const noexcept {
+    bool operator!=(const iterator& other) const noexcept {
       return !(*this == other);
     }
 
   private:
-    static T *loadUnmarkedNext(T *node) noexcept {
+    static T* loadUnmarkedNext(T* node) noexcept {
       std::uintptr_t raw = (node->*Next).load(std::memory_order_acquire);
       return Unmarked<T>(raw);
     }
 
     /*
-      Advance m_Curr until it is either nullptr or observed live.
+      Advance curr until it is either nullptr or observed live.
 
       Iterator invariants:
 
-        1. m_Dummy is the permanent sentinel node.
+        1. dummy is the permanent sentinel node.
            It is never logically deleted and never physically removed.
 
-        2. m_Curr is the candidate node to return.
+        2. curr is the candidate node to return.
 
-        3. m_Prev is a best-effort predecessor of m_Curr along the path
+        3. prev is a best-effort predecessor of curr along the path
            observed by this iterator.
 
-        4. m_Prev is not guaranteed to still be reachable from m_Dummy.
+        4. prev is not guaranteed to still be reachable from dummy.
            It may have become logically deleted concurrently.
 
         5. Because of invariant 4, helping from the iterator is opportunistic.
-           A successful CAS helps unlink m_Curr.
+           A successful CAS helps unlink curr.
            A failed CAS only means the observed predecessor/current relation
            is stale.
 
@@ -182,38 +182,37 @@ public:
           Mutating operations use stronger validation/retry.
     */
     void advanceToLive() noexcept {
-      while (m_Curr != nullptr) {
-        std::uintptr_t currNext =
-            (m_Curr->*Next).load(std::memory_order_acquire);
+      while (curr != nullptr) {
+        std::uintptr_t currNext = (curr->*Next).load(std::memory_order_acquire);
 
-        T *succ = Unmarked<T>(currNext);
+        T* succ = Unmarked<T>(currNext);
 
         if (!IsMarked(currNext)) {
           return;
         }
 
         /*
-          m_Curr is logically deleted.
+          curr is logically deleted.
 
           Try to physically unlink:
 
-              m_Prev -> m_Curr -> succ
+              prev -> curr -> succ
 
           into:
 
-              m_Prev -> succ
+              prev -> succ
 
-          This does not revive m_Curr. The logical deletion mark is stored in
-          m_Curr->Next, and this CAS does not modify m_Curr->Next.
+          This does not revive curr. The logical deletion mark is stored in
+          curr->Next, and this CAS does not modify curr->Next.
         */
-        std::uintptr_t expected = reinterpret_cast<std::uintptr_t>(m_Curr);
+        std::uintptr_t expected = reinterpret_cast<std::uintptr_t>(curr);
         std::uintptr_t desired = reinterpret_cast<std::uintptr_t>(succ);
 
-        if ((m_Prev->*Next)
+        if ((prev->*Next)
                 .compare_exchange_strong(expected, desired,
                                          std::memory_order_acq_rel,
                                          std::memory_order_acquire)) {
-          m_Curr = succ;
+          curr = succ;
           continue;
         }
 
@@ -223,15 +222,15 @@ public:
           Do not restart. Preserve iterator progress by continuing forward
           along the successor chain that was already observed.
         */
-        m_Prev = m_Curr;
-        m_Curr = succ;
+        prev = curr;
+        curr = succ;
       }
     }
 
   private:
-    T *m_Dummy;
-    T *m_Curr;
-    T *m_Prev;
+    T* dummy;
+    T* curr;
+    T* prev;
   };
 
   /*
@@ -243,23 +242,23 @@ public:
   */
   class const_iterator {
   public:
-    const_iterator() noexcept : m_Curr{nullptr} {}
+    const_iterator() noexcept : curr{nullptr} {}
 
-    explicit const_iterator(const T *dummy) noexcept : m_Curr{nullptr} {
+    explicit const_iterator(const T* dummy) noexcept : curr{nullptr} {
       std::uintptr_t raw = (dummy->*Next).load(std::memory_order_acquire);
-      m_Curr = Unmarked<T>(raw);
+      curr = Unmarked<T>(raw);
       skipMarked();
     }
 
-    const T *operator->() const noexcept { return m_Curr; }
-    const T &operator*() const noexcept { return *m_Curr; }
+    const T* operator->() const noexcept { return curr; }
+    const T& operator*() const noexcept { return *curr; }
 
-    const_iterator &operator++() noexcept {
-      if (m_Curr == nullptr) {
+    const_iterator& operator++() noexcept {
+      if (curr == nullptr) {
         return *this;
       }
-      std::uintptr_t raw = (m_Curr->*Next).load(std::memory_order_acquire);
-      m_Curr = Unmarked<T>(raw);
+      std::uintptr_t raw = (curr->*Next).load(std::memory_order_acquire);
+      curr = Unmarked<T>(raw);
       skipMarked();
       return *this;
     }
@@ -270,18 +269,18 @@ public:
       return old;
     }
 
-    bool operator==(const const_iterator &other) const noexcept {
-      return m_Curr == other.m_Curr;
+    bool operator==(const const_iterator& other) const noexcept {
+      return curr == other.curr;
     }
 
-    bool operator!=(const const_iterator &other) const noexcept {
+    bool operator!=(const const_iterator& other) const noexcept {
       return !(*this == other);
     }
 
   private:
     void skipMarked() noexcept {
-      while (m_Curr != nullptr) {
-        std::uintptr_t raw = (m_Curr->*Next).load(std::memory_order_acquire);
+      while (curr != nullptr) {
+        std::uintptr_t raw = (curr->*Next).load(std::memory_order_acquire);
         if (!IsMarked(raw)) {
           return;
         }
@@ -290,27 +289,27 @@ public:
           Helping requires a mutable predecessor, which const_iterator
           does not track.
         */
-        m_Curr = Unmarked<T>(raw);
+        curr = Unmarked<T>(raw);
       }
     }
 
-    const T *m_Curr;
+    const T* curr;
   };
 
 public:
-  HMList() noexcept : m_DummyHead{} {
+  HMList() noexcept : dummyHead{} {
     /*
       The dummy head is permanent.
       Its Next field is the actual list head and starts empty.
     */
-    (m_DummyHead.*Next).store(0, std::memory_order_relaxed);
+    (dummyHead.*Next).store(0, std::memory_order_relaxed);
   }
 
-  HMList(const HMList &) = delete;
-  HMList &operator=(const HMList &) = delete;
+  HMList(const HMList&) = delete;
+  HMList& operator=(const HMList&) = delete;
 
-  HMList(HMList &&) = delete;
-  HMList &operator=(HMList &&) = delete;
+  HMList(HMList&&) = delete;
+  HMList& operator=(HMList&&) = delete;
 
   /*
     Approximate emptiness check.
@@ -319,14 +318,14 @@ public:
     Concurrent Push()/Remove() may immediately change the result.
   */
   bool Empty() const noexcept {
-    std::uintptr_t raw = (m_DummyHead.*Next).load(std::memory_order_acquire);
+    std::uintptr_t raw = (dummyHead.*Next).load(std::memory_order_acquire);
     return Unmarked<T>(raw) == nullptr;
   }
 
-  iterator Begin() noexcept { return iterator{&m_DummyHead}; }
+  iterator Begin() noexcept { return iterator{&dummyHead}; }
   iterator End() noexcept { return iterator{}; }
 
-  const_iterator Begin() const noexcept { return const_iterator{&m_DummyHead}; }
+  const_iterator Begin() const noexcept { return const_iterator{&dummyHead}; }
   const_iterator End() const noexcept { return const_iterator{}; }
 
   /*
@@ -352,8 +351,8 @@ public:
       from Remove() may be reused after the caller knows it is safe to do so
       (subject to the surrounding reclamation protocol).
   */
-  void Push(T *node) noexcept {
-    auto &head = m_DummyHead.*Next;
+  void Push(T* node) noexcept {
+    auto& head = dummyHead.*Next;
 
     std::uintptr_t oldHead = head.load(std::memory_order_acquire);
 
@@ -370,7 +369,7 @@ public:
         of head, making the relaxed store visible to any thread that
         then reads head.
       */
-      (node->*Next).store(oldHead & ~MarkBit, std::memory_order_relaxed);
+      (node->*Next).store(oldHead & ~markBit, std::memory_order_relaxed);
 
       std::uintptr_t desired = reinterpret_cast<std::uintptr_t>(node);
 
@@ -401,19 +400,19 @@ public:
     Complexity:
       - O(n), because this unordered singly-linked list must search for target.
   */
-  [[nodiscard]] bool Remove(T *target) noexcept {
-    if (target == nullptr || target == &m_DummyHead) {
+  [[nodiscard]] bool Remove(T* target) noexcept {
+    if (target == nullptr || target == &dummyHead) {
       return false;
     }
 
     for (;;) {
-      T *pred = &m_DummyHead;
-      T *curr = Unmarked<T>((pred->*Next).load(std::memory_order_acquire));
+      T* pred = &dummyHead;
+      T* curr = Unmarked<T>((pred->*Next).load(std::memory_order_acquire));
 
       while (curr != nullptr) {
         std::uintptr_t currNext = (curr->*Next).load(std::memory_order_acquire);
 
-        T *succ = Unmarked<T>(currNext);
+        T* succ = Unmarked<T>(currNext);
 
         if (IsMarked(currNext)) {
           /*
@@ -446,7 +445,7 @@ public:
             relying on the value written back by compare_exchange_strong.
           */
           std::uintptr_t expected = currNext; // known unmarked at this point
-          std::uintptr_t marked = currNext | MarkBit;
+          std::uintptr_t marked = currNext | markBit;
 
           if ((curr->*Next)
                   .compare_exchange_strong(expected, marked,
@@ -512,13 +511,13 @@ public:
     not cause Contains() to return true for themselves even when still
     physically reachable from the dummy head.
   */
-  [[nodiscard]] bool Contains(const T *target) const noexcept {
-    if (target == nullptr || target == &m_DummyHead) {
+  [[nodiscard]] bool Contains(const T* target) const noexcept {
+    if (target == nullptr || target == &dummyHead) {
       return false;
     }
 
-    const T *curr =
-        Unmarked<T>((m_DummyHead.*Next).load(std::memory_order_acquire));
+    const T* curr =
+        Unmarked<T>((dummyHead.*Next).load(std::memory_order_acquire));
 
     while (curr != nullptr) {
       std::uintptr_t currNext = (curr->*Next).load(std::memory_order_acquire);
@@ -547,8 +546,8 @@ public:
       - The returned pointer must not be treated as a data node.
       - It is safe to use as a starting predecessor in a custom traversal.
   */
-  T *Dummy() noexcept { return &m_DummyHead; }
-  const T *Dummy() const noexcept { return &m_DummyHead; }
+  T* Dummy() noexcept { return &dummyHead; }
+  const T* Dummy() const noexcept { return &dummyHead; }
 
 private:
   /*
@@ -569,8 +568,8 @@ private:
     Caller owns the returned chain subject to the surrounding reclamation
     protocol.
   */
-  [[nodiscard]] T *UnsafeTakeAll() noexcept {
-    auto &head = m_DummyHead.*Next;
+  [[nodiscard]] T* UnsafeTakeAll() noexcept {
+    auto& head = dummyHead.*Next;
     std::uintptr_t old = head.exchange(0, std::memory_order_acq_rel);
     return Unmarked<T>(old);
   }
@@ -589,12 +588,12 @@ private:
     stripping marks, to catch misuse of logically deleted nodes during
     development.
   */
-  void UnsafePushChain(T *first) noexcept {
+  void UnsafePushChain(T* first) noexcept {
     if (first == nullptr) {
       return;
     }
 
-    T *tail = first;
+    T* tail = first;
 
     for (;;) {
       std::uintptr_t nextRaw = (tail->*Next).load(std::memory_order_relaxed);
@@ -602,7 +601,7 @@ private:
       assert(!IsMarked(nextRaw) &&
              "UnsafePushChain: chain contains a logically deleted node");
 
-      T *succ = Unmarked<T>(nextRaw);
+      T* succ = Unmarked<T>(nextRaw);
 
       if (succ == nullptr) {
         break;
@@ -611,11 +610,11 @@ private:
       tail = succ;
     }
 
-    auto &head = m_DummyHead.*Next;
+    auto& head = dummyHead.*Next;
     std::uintptr_t oldHead = head.load(std::memory_order_acquire);
 
     for (;;) {
-      T *oldHeadPtr = Unmarked<T>(oldHead);
+      T* oldHeadPtr = Unmarked<T>(oldHead);
 
       (tail->*Next)
           .store(reinterpret_cast<std::uintptr_t>(oldHeadPtr),
@@ -639,12 +638,12 @@ private:
     UNSAFE. Requires external exclusion equivalent to UnsafeTakeAll() on src.
     See UnsafeTakeAll() and UnsafePushChain() for full preconditions.
   */
-  friend void UnsafeSpliceFront(HMList &dst, HMList &src) noexcept {
+  friend void UnsafeSpliceFront(HMList& dst, HMList& src) noexcept {
     if (&dst == &src) {
       return;
     }
 
-    T *chain = src.UnsafeTakeAll();
+    T* chain = src.UnsafeTakeAll();
 
     if (chain != nullptr) {
       dst.UnsafePushChain(chain);
@@ -652,7 +651,7 @@ private:
   }
 
 private:
-  T m_DummyHead;
+  T dummyHead;
 };
 
 } // namespace rocky

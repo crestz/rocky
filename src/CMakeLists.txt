@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 4.0.0)
 
-file(GLOB_RECURSE LIB_SOURCES "*.cxx")
+file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS "*.cxx")
 
 add_library("librocky"
   ${LIB_SOURCES})

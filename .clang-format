@@ -1,0 +1,9 @@
+---
+BasedOnStyle: LLVM
+Language: Cpp
+IndentWidth: 2
+ColumnLimit: 80
+PointerAlignment: Left
+DerivePointerAlignment: false
+SortIncludes: CaseSensitive
+NamespaceIndentation: None
