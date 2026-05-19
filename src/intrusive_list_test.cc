@@ -99,7 +99,7 @@ TEST(IntrusiveListTest, PopMakesListEmpty) {
   List list;
   Node n(1);
   list.Push(&n);
-  list.Pop();
+  EXPECT_EQ(list.Pop(), &n);
   EXPECT_EQ(list.begin(), list.end());
 }
 
@@ -183,7 +183,7 @@ TEST(IntrusiveListTest, NodeCanBeReusedAfterPop) {
   List list;
   Node n(1);
   list.Push(&n);
-  list.Pop();
+  EXPECT_EQ(list.Pop(), &n);
   n.Val = 42;
   n.Next = nullptr;
   list.Push(&n);
